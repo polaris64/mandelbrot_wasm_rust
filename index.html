@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+    <meta charset="utf-8">
+    <script src="https://code.jquery.com/jquery-3.2.1.min.js"></script>
+    <script type="text/javascript">
+      let ctx = null;
+      let pointer = null;
+      let width = 512;
+      let height = 512;
+      let mod = null;
+      let module = null;
+      let render_time = null;
+      let js_buffer = null;
+      let img = null;
+      let js_img = null;
+      let gl = null;
+      let gl_vertex_data = null;
+      let gl_vertex_buf = null;
+      let gl_uni_max_iters = null;
+      let gl_uni_set_col = null;
+
+      function gl_init() {
+        let canvas = document.getElementById('canv_gl');
+        if (canvas && canvas.getContext)
+        {
+          gl = canvas.getContext('webgl');
+          gl.viewportWidth  = canvas.width;
+          gl.viewportHeight = canvas.height;
+
+          let vs_src = `
+            attribute vec2 aPos;
+            attribute vec2 aComplex;
+
+            varying vec2 complex_coord;
+
+            void main() {
+              complex_coord = aComplex;
+              gl_Position = vec4(aPos, 0.0, 1.0);
+            }
+          `;
+          let fs_src = `
+            precision highp float;
+
+            varying vec2 complex_coord;
+
+            uniform int max_iters;
+            uniform float set_col;
+
+            vec4 mandelbrot() {
+              int  iters = 1;
+              vec2 c     = complex_coord;
+              for (int i = 0; i < 1000; i++) {
+
+                float temp = (pow(c.x, 2.0) - pow(c.y, 2.0)) + complex_coord.x;
+                c.y = (2.0 * c.x * c.y) + complex_coord.y;
+                c.x = temp;
+
+                iters = iters + 1;
+                if (length(c) > 4.0 || iters >= max_iters) {
+                  break;
+                }
+              }
+
+              if (iters >= max_iters) {
+                return vec4(set_col, set_col, set_col, 1.0);
+              } else {
+                float br = float(iters) * (1.0 / float(max_iters));
+                return vec4(br, br, br, 1.0);
+              }
+            }
+
+            void main() {
+              gl_FragColor = mandelbrot();
+            }
+          `;
+          let vs = gl.createShader(gl.VERTEX_SHADER);
+          let fs = gl.createShader(gl.FRAGMENT_SHADER);
+          gl.shaderSource(vs, vs_src);
+          gl.shaderSource(fs, fs_src);
+          gl.compileShader(vs);
+          gl.compileShader(fs);
+          console.log(gl.getShaderInfoLog(fs));
+          let shader_program = gl.createProgram();
+          gl.attachShader(shader_program, vs);
+          gl.attachShader(shader_program, fs);
+          gl.linkProgram(shader_program);
+          gl.useProgram(shader_program);
+
+          gl.clearColor(0.8, 0.3, 0.5, 1.0);
+
+          gl_vertex_buffer = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, gl_vertex_buffer);
+
+          // Vertex attribute: position (vec2f)
+          let attrib_pos = gl.getAttribLocation(shader_program, 'aPos');
+          gl.vertexAttribPointer(
+            attrib_pos, // Attribute index
+            2,          // Attribute item count
+            gl.FLOAT,   // Attribute item type
+            false,      // Normalised?
+            4 * 4,      // Stride in bytes (4 32-bit floats)
+            0           // Offset from start of buffer
+          );
+          gl.enableVertexAttribArray(attrib_pos);
+
+          // Vertex attribute: complex co-ordinate (vec2f)
+          let attrib_complex = gl.getAttribLocation(shader_program, 'aComplex');
+          gl.vertexAttribPointer(
+            attrib_complex, // Attribute index
+            2,              // Attribute item count
+            gl.FLOAT,       // Attribute item type
+            false,          // Normalised?
+            4 * 4,          // Stride in bytes (4 32-bit floats)
+            2 * 4           // Offset from start of buffer in bytes (2 32-bit floats)
+          );
+          gl.enableVertexAttribArray(attrib_complex);
+
+          gl_uni_max_iters = gl.getUniformLocation(shader_program, 'max_iters');
+          gl_uni_set_col   = gl.getUniformLocation(shader_program, 'set_col');
+        }
+      }
+
+      function gl_mandelbrot(num_runs, pointer, width, height, max_iterations, real_min, real_max, imag_min, imag_max, set_col) {
+        gl_vertex_data = new Float32Array([
+          -1.0, -1.0, real_min, imag_max,
+          -1.0,  1.0, real_min, imag_min,
+           1.0,  1.0, real_max, imag_min,
+           1.0, -1.0, real_max, imag_max,
+        ]);
+        gl.uniform1i(gl_uni_max_iters, max_iterations);
+        gl.uniform1f(gl_uni_set_col,   set_col / 255.0);
+        gl.bufferData(gl.ARRAY_BUFFER, gl_vertex_data, gl.STATIC_DRAW);
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        for (let i = 0; i < num_runs; i++)
+          gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+        gl.finish();
+      }
+
+      function mandelbrot(num_runs, pointer, width, height, max_iterations, real_min, real_max, imag_min, imag_max, set_col) {
+        let real_ratio = (real_max - real_min) / width;
+        let imag_ratio = (imag_max - imag_min) / height;
+
+        let run_count, x, y, buf_off_x, buf_off_y, c_real, c_imag, iters, a, b, a_temp, col;
+
+        for (run_count = 0; run_count < num_runs; run_count++)
+        {
+          for (y = 0; y < height; y++)
+          {
+            buf_off_y = y * width * 4;
+            c_imag = y * imag_ratio + imag_min;
+            for (x = 0; x < width; x++)
+            {
+              buf_off_x = buf_off_y + (x * 4);
+              c_real = x * real_ratio + real_min;
+
+              iters = 1;
+              a     = c_real;
+              b     = c_imag;
+              while (iters < max_iterations && (a * a + b * b) <= 4.0)
+              {
+                a_temp = (a * a - b * b) + c_real;
+                b = (2.0 * a * b) + c_imag;
+                a = a_temp;
+                iters += 1;
+              }
+
+              col = 0;
+              if (iters >= max_iterations)
+                col = set_col;
+              else
+                col = iters * (255 / max_iterations);
+
+              js_buffer[buf_off_x + 0] = col & 0xFF;
+              js_buffer[buf_off_x + 1] = col & 0xFF;
+              js_buffer[buf_off_x + 2] = col & 0xFF;
+              js_buffer[buf_off_x + 3] = 255;
+            }
+          }
+        }
+
+      }
+
+      function updateTextInputs() {
+        $('#txt_iterations').val($('#iterations').val());
+        $('#txt_real_min').val($('#real_min').val() / 1000.0);
+        $('#txt_real_max').val($('#real_max').val() / 1000.0);
+        $('#txt_imag_min').val($('#imag_min').val() / 1000.0);
+        $('#txt_imag_max').val($('#imag_max').val() / 1000.0);
+      }
+
+      function draw(n) {
+        let iterations = parseInt($('#txt_iterations').val());
+        let real_min = parseFloat($('#txt_real_min').val());
+        let real_max = parseFloat($('#txt_real_max').val());
+        let imag_min = parseFloat($('#txt_imag_min').val());
+        let imag_max = parseFloat($('#txt_imag_max').val());
+        let col = $('#cb_set_black').is(':checked') ? 0 : 255;
+        let ts = 0;
+        let te = 0;
+        let renderer = module.mandelbrot;
+        let p_img = img;
+        switch ($('#renderer').val().toUpperCase())
+        {
+          case 'JS':
+            renderer = mandelbrot;
+            p_img = js_img;
+            break;
+          case 'WASM':
+            renderer = module.mandelbrot;
+            p_img = img;
+            break;
+          case 'WEBGL':
+            renderer = gl_mandelbrot;
+            p_img = null;
+            break;
+        }
+        ts = performance.now();
+        renderer(
+          n,
+          pointer,
+          width,
+          height,
+          iterations,
+          real_min, real_max,
+          imag_min, imag_max,
+          col,
+        );
+        te = performance.now();
+        render_time = (te - ts) / n;
+        if (p_img)
+          ctx.putImageData(p_img, 0, 0);
+
+        $('#render_time').text(render_time);
+      }
+
+      $('document').ready(() => {
+        gl_init();
+        fetch('mandelbrot.wasm')
+          .then(resp => resp.arrayBuffer())
+          .then(bytes => WebAssembly.instantiate(bytes))
+          .then(results => {
+            mod = results.instance;
+            module = {
+              malloc:     mod.exports.malloc,
+              dealloc:    mod.exports.dealloc,
+              mandelbrot: mod.exports.mandelbrot,
+            };
+
+            let canvas = document.getElementById('canv');
+            if (canvas && canvas.getContext)
+            {
+              ctx = canvas.getContext('2d');
+
+              let byte_size = width * height * 4;
+              pointer = module.malloc(byte_size);
+
+              let buf   = new Uint8ClampedArray(mod.exports.memory.buffer, pointer, byte_size);
+              js_buffer = new Uint8ClampedArray(byte_size);
+              img    = new ImageData(buf,       width, height);
+              js_img = new ImageData(js_buffer, width, height);
+
+              updateTextInputs();
+              draw(1);
+            }
+          });
+
+        $('.controller.range').change(() => updateTextInputs());
+        $('.controller').change(() => draw(1));
+
+        $('#benchmark').click(() => {
+          draw(5);
+        });
+      });
+    </script>
+  </head>
+
+  <body>
+    <div>
+      <label>Renderer:</label>
+      <select id="renderer" class="controller">
+        <option value="JS">JavaScript</option>
+        <option value="WASM">WebAssembly</option>
+        <option value="WEBGL">WebGL</option>
+      </select>
+    </div>
+    <div style="border: 1px solid grey; border-radius: 5px; padding: 1em; display: inline-block; width: 45%;">
+      <canvas id="canv" width="512" height="512" style="max-width: 100%;"></canvas>
+    </div>
+    <div style="border: 1px solid grey; border-radius: 5px; padding: 1em; display: inline-block; width: 45%;">
+      <canvas id="canv_gl" width="512" height="512" style="max-width: 100%;"></canvas>
+    </div>
+    <div>
+      <table>
+        <tr>
+          <th>Iterations</th>
+          <th>c.real (min/max)</th>
+          <th>c.imag (min/max)</th>
+          <th>Show in-set as black?</th>
+        </tr>
+        <tr>
+          <td>
+            <input id="iterations" class="controller range" type="range" value="50" min="1" max="200" step="1" />
+            <br />
+            <input id="txt_iterations" class="controller" type="text" size="5" value="0" />
+          </td>
+          <td>
+            <input id="real_min" class="controller range" type="range" value="-2000" min="-2500" max="2500" step="1" />
+            <span>/</span>
+            <input id="real_max" class="controller range" type="range" value="500" min="-2500" max="2500" step="1" />
+            <br />
+            <input id="txt_real_min" class="controller" type="text" size="5" value="0" />
+            <span>/</span>
+            <input id="txt_real_max" class="controller" type="text" size="5" value="0" />
+          </td>
+          <td>
+            <input id="imag_min" class="controller range" type="range" value="-1200" min="-2500" max="2500" step="1" />
+            <span>/</span>
+            <input id="imag_max" class="controller range" type="range" value="1200" min="-2500" max="2500" step="1" />
+            <br />
+            <input id="txt_imag_min" class="controller" type="text" size="5" value="0" />
+            <span>/</span>
+            <input id="txt_imag_max" class="controller" type="text" size="5" value="0" />
+          </td>
+          <td>
+            <input id="cb_set_black" class="controller" type="checkbox" value="ON" checked />
+          </td>
+        </tr>
+      </table>
+    </div>
+    <p>
+      <button id="benchmark">Benchmark</button>
+      The last frame took <span id="render_time">0</span>ms to render.
+    </p>
+  </body>
+
+</html>

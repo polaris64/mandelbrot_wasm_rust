@@ -1,0 +1,10 @@
+[package]
+name = "mandelbrot_wasm"
+version = "0.1.0"
+authors = ["Simon Pugnet <simon@polaris64.net>"]
+
+[dependencies]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
